@@ -1,15 +1,10 @@
-import firebase from '@react-native-firebase/app';
-// Si tu as besoin d'autres services, importe-les ici
-// import '@react-native-firebase/firestore'; 
+import { getApp } from '@react-native-firebase/app';
+import { getFirestore } from '@react-native-firebase/firestore';
 
-const firebaseConfig = {
-  // Ajoute ici tes infos (apiKey, appId, projectId) 
-  // que tu trouves dans la console Firebase (google-services.json)
+export const getFirebaseApp = () => {
+  return getApp();
 };
 
-// Vérification cruciale : n'initialiser qu'une seule fois
-if (!firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
+export const db = getFirestore();
 
-export default firebase;
+export const firebaseApp = getFirebaseApp();

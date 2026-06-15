@@ -8,16 +8,20 @@ import {
   Alert, 
   ActivityIndicator, 
   Image, 
-  StatusBar 
+  StatusBar,
+  TextInput,
+  PermissionsAndroid,
+  Platform
 } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { useNavigation } from '@react-navigation/native';
-import { db } from '../services/firebaseConfig';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import firestore from '@react-native-firebase/firestore';
+import Geolocation from 'react-native-geolocation-service';
 
 const DEFAULT_VEHICLES = [
-  { id: '1', name: 'Go Share', subtitle: 'Go Share', estimate: 40.50, color: '#E5A93B' },
-  { id: '2', name: 'Go Private', subtitle: 'Go Private', estimate: 65.50, color: '#1E1E1E' },
-  { id: '3', name: 'Go Luxury', subtitle: 'Go Luxury', estimate: 128.20, color: '#1E1E1E' }
+  { id: '1', name: 'Yango Economy', subtitle: 'Économique', estimate: 1200, color: '#E5A93B' },
+  { id: '2', name: 'Yango Comfort', subtitle: 'Confort', estimate: 2500, color: '#1E1E1E' },
+  { id: '3', name: 'Yango XL', subtitle: 'Grand volume', estimate: 4500, color: '#1E1E1E' }
 ];
 
 const ROUTE_COORDS = [
@@ -37,20 +41,61 @@ const NEARBY_CARS = [
 
 export default function ClientHomeScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+  const [userLocation, setUserLocation] = useState<{lat: number, lng: number}>({ lat: 3.848, lng: 11.502 });
+  const [userAddress, setUserAddress] = useState('Position actuelle');
+  const [destination, setDestination] = useState('');
+  const [destCoords, setDestCoords] = useState({ lat: 3.857, lng: 11.520 });
   const [vehicles, setVehicles] = useState(DEFAULT_VEHICLES);
   const [selectedVehicle, setSelectedVehicle] = useState(DEFAULT_VEHICLES[0]);
-  const [destination] = useState('Université de Yaoundé');
-  const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [watchId, setWatchId] = useState<number | null>(null);
+
+  // Gestion de la géolocalisation réelle
+  useEffect(() => {
+    const requestLocationPermission = async () => {
+      if (Platform.OS === 'android') {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+        );
+        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+          getRealLocation();
+        }
+      } else {
+        getRealLocation();
+      }
+    };
+
+    const getRealLocation = () => {
+      try {
+        Geolocation.getCurrentPosition(
+          (position) => {
+            const { latitude, longitude } = position.coords;
+            setUserLocation({ lat: latitude, lng: longitude });
+            setUserAddress('Position actuelle détectée');
+          },
+          (error) => {
+            console.log("Info GPS:", error.message);
+            // On ne bloque pas l'app si le GPS échoue, on reste sur les coordonnées par défaut
+          },
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 10000 }
+        );
+      } catch (e) {
+        console.warn("Geolocation service non disponible");
+      }
+    };
+
+    requestLocationPermission();
+  }, []);
 
   useEffect(() => {
     const loadRideOptions = async () => {
       setSyncing(true);
       try {
-        const snapshot = await db.collection('rideOptions').orderBy('order').get();
+        const snapshot = await firestore().collection('rideOptions').orderBy('order').get();
         if (!snapshot.empty) {
-          const loaded = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-          setVehicles(loaded as any);
+          const loaded = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() as any }));
+          setVehicles(loaded);
           setSelectedVehicle(loaded[0] as any);
         }
       } catch (error) {
@@ -64,54 +109,35 @@ export default function ClientHomeScreen() {
   }, []);
 
   const handleRideNow = async () => {
-    setLoading(true);
-    try {
-      await db.collection('bookings').add({
-        vehicleName: selectedVehicle.name,
-        vehicleType: selectedVehicle.name,
-        pricePerKm: selectedVehicle.name === 'Go Luxury' ? 128 : selectedVehicle.name === 'Go Private' ? 65 : 40,
-        destination,
-        status: 'requested',
-        createdAt: new Date()
-      });
-      Alert.alert('Réservation envoyée', 'Votre course a bien été enregistrée.');
-    } catch (error) {
-      console.warn('Firestore booking error:', error);
-      Alert.alert('Erreur', 'Impossible d’enregistrer votre demande actuellement.');
-    } finally {
-      setLoading(false);
-    }
+    navigation.navigate('ConfirmRide', { 
+      vehicle: selectedVehicle,
+      destination: destination,
+      origin: 'Ma position actuelle'
+    });
   };
 
   const getCarImage = (name: string) => {
-    switch (name) {
-      case 'Go Share':
+    const lowerName = name.toLowerCase();
+    if (lowerName.includes('economy')) {
         return require('../assets/car_share.png');
-      case 'Go Private':
+    } else if (lowerName.includes('comfort')) {
         return require('../assets/car_private.png');
-      case 'Go Luxury':
+    } else if (lowerName.includes('xl')) {
         return require('../assets/car_luxury.png');
-      default:
-        return require('../assets/car_private.png');
     }
+    return require('../assets/car_private.png');
   };
 
   const getCarRotation = (name: string) => {
-    switch (name) {
-      case 'Go Share':
-        return '-20deg';
-      case 'Go Private':
-        return '15deg';
-      case 'Go Luxury':
-        return '0deg';
-      default:
-        return '0deg';
-    }
+    const lowerName = name.toLowerCase();
+    if (lowerName.includes('economy')) return '-20deg';
+    if (lowerName.includes('comfort')) return '15deg';
+    return '0deg';
   };
 
   const formatEstimate = (estimate: any) => {
     if (typeof estimate === 'number') {
-      return `Est. $${estimate.toFixed(2)}`;
+      return `${estimate} FCFA`;
     }
     const str = String(estimate);
     if (!str.includes('$') && !str.includes('F')) {
@@ -122,7 +148,7 @@ export default function ClientHomeScreen() {
 
   // Generate HTML for Leaflet Free Map (using CartoDB basemap tiles, 100% free and API-key-less)
   const getMapHtml = () => {
-    // Top-down white car icon SVG with URL-encoded '#' replaced by '%23' for Android WebView compatibility
+    const startCoords = [userLocation.lat, userLocation.lng];
     const carSvg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 60" width="30" height="60">
       <rect x="1" y="8" width="4" height="10" rx="2" fill="%23111" />
@@ -148,7 +174,7 @@ export default function ClientHomeScreen() {
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
-          body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #0E0E0E; }
+          body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #F5F5F5; }
           .start-marker {
             width: 20px;
             height: 20px;
@@ -162,7 +188,7 @@ export default function ClientHomeScreen() {
             width: 10px;
             height: 10px;
             border-radius: 50%;
-            background: #E5A93B;
+            background: #D32F2F;
           }
           .dest-marker {
             width: 26px;
@@ -177,7 +203,7 @@ export default function ClientHomeScreen() {
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            background: #E5A93B;
+            background: #D32F2F;
             border: 1.5px solid #FFF;
           }
           .car-container {
@@ -196,12 +222,13 @@ export default function ClientHomeScreen() {
             scrollWheelZoom: true
           }).setView([3.852, 11.511], 14);
           
-          L.tileLayer('https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
+          L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
             maxZoom: 19
           }).addTo(map);
 
-          const routeCoords = ${JSON.stringify(ROUTE_COORDS.map(c => [c.latitude, c.longitude]))};
-          const polyline = L.polyline(routeCoords, { color: '#E5A93B', weight: 4 }).addTo(map);
+          const start = ${JSON.stringify(startCoords)};
+          const dest = [${destCoords.lat}, ${destCoords.lng}];
+          const polyline = L.polyline([start, dest], { color: '#D32F2F', weight: 5, dashArray: '10, 10' }).addTo(map);
           
           map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
 
@@ -212,7 +239,7 @@ export default function ClientHomeScreen() {
             iconSize: [20, 20],
             iconAnchor: [10, 10]
           });
-          L.marker(routeCoords[0], { icon: startIcon }).addTo(map);
+          L.marker(start, { icon: startIcon }).addTo(map);
 
           // Destination Point Marker
           const destIcon = L.divIcon({
@@ -221,7 +248,7 @@ export default function ClientHomeScreen() {
             iconSize: [26, 26],
             iconAnchor: [13, 13]
           });
-          L.marker(routeCoords[routeCoords.length - 1], { icon: destIcon }).addTo(map);
+          L.marker(dest, { icon: destIcon }).addTo(map);
 
           // Nearby Car Markers
           const cars = ${JSON.stringify(NEARBY_CARS)};
@@ -244,230 +271,89 @@ export default function ClientHomeScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
 
-      {/* WebView Map Background */}
       <WebView
         style={styles.map}
-        originWhitelist={['*']}
         source={{ html: getMapHtml() }}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        scalesPageToFit={true}
-        scrollEnabled={false}
       />
 
-      {/* Custom Header Back Button */}
-      <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-        <Text style={styles.backArrow}>←</Text>
+      <TouchableOpacity 
+        style={styles.menuButton} 
+        onPress={() => navigation.openDrawer()}
+      >
+        <Text style={styles.menuIcon}>☰</Text>
       </TouchableOpacity>
 
-      {/* Bottom Sheet UI */}
-      <View style={styles.bottomSheet}>
-        {syncing && (
-          <View style={styles.syncRow}>
-            <ActivityIndicator color="#E5A93B" size="small" />
-            <Text style={styles.syncText}>Mise à jour des services...</Text>
-          </View>
-        )}
-
-        <View style={styles.cardListContainer}>
-          <FlatList
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            data={vehicles}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.rideList}
-            renderItem={({ item }) => {
-              const active = selectedVehicle.id === item.id;
-              return (
-                <TouchableOpacity 
-                  style={[
-                    styles.rideCard, 
-                    active ? styles.rideCardActive : styles.rideCardInactive
-                  ]} 
-                  onPress={() => setSelectedVehicle(item)}
-                  activeOpacity={0.8}
-                >
-                  <Image 
-                    source={getCarImage(item.name)} 
-                    style={[
-                      styles.carImage, 
-                      { transform: [{ rotate: getCarRotation(item.name) }] }
-                    ]} 
-                  />
-                  <View style={styles.cardInfo}>
-                    <Text style={styles.rideName}>{item.name}</Text>
-                    <Text 
-                      style={[
-                        styles.ridePrice, 
-                        active ? styles.ridePriceActive : styles.ridePriceInactive
-                      ]}
-                    >
-                      {formatEstimate(item.estimate)}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            }}
-          />
-        </View>
-
-        {/* Ride Now Button Area */}
-        <TouchableOpacity 
-          style={styles.actionButton} 
-          onPress={handleRideNow} 
-          disabled={loading}
-          activeOpacity={0.9}
-        >
-          <Text style={styles.actionText}>
-            {loading ? 'RESERVATION...' : 'RIDE NOW'}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* SOS Button (Moved to top right to preserve clean bottom view) */}
+      {/* SOS Button fixe */}
       <TouchableOpacity style={styles.sosButton} onPress={() => navigation.navigate('Sos')}>
         <Text style={styles.sosText}>SOS</Text>
       </TouchableOpacity>
+
+      {/* Bouton Commencer la course */}
+      <View style={styles.bottomContainer}>
+        <TouchableOpacity 
+          style={styles.startRideBtn} 
+          onPress={() => navigation.navigate('Booking')}
+        >
+          <Text style={styles.startRideText}>COMMENCER LA COURSE</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { 
-    flex: 1, 
-    backgroundColor: '#0A0A0A' 
-  },
+  container: { flex: 1 },
   map: { 
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#0E0E0E',
-  },
-  backButton: {
-    position: 'absolute',
-    top: 50,
-    left: 20,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-  },
-  backArrow: {
-    color: '#E5A93B',
-    fontSize: 28,
-    fontWeight: 'bold',
-    lineHeight: 28,
-  },
-  bottomSheet: { 
-    position: 'absolute', 
-    left: 0, 
-    right: 0, 
-    bottom: 0, 
-    backgroundColor: '#0A0A0A', 
-    borderTopLeftRadius: 28, 
-    borderTopRightRadius: 28,
-    paddingTop: 40,
-    overflow: 'visible',
-  },
-  syncRow: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    justifyContent: 'center',
-    position: 'absolute',
-    top: 10,
-    left: 0,
-    right: 0,
-  },
-  syncText: { 
-    color: '#E5A93B', 
-    fontSize: 12,
-    marginLeft: 6 
-  },
-  cardListContainer: {
-    overflow: 'visible',
-    paddingHorizontal: 16,
-  },
-  rideList: { 
-    paddingTop: 35, // Space for the overlapping cars
-    paddingBottom: 20,
-    overflow: 'visible',
-  },
-  rideCard: { 
-    width: 135, 
-    height: 170,
-    borderRadius: 24, 
-    padding: 16, 
-    marginRight: 12, 
-    justifyContent: 'flex-end',
-    position: 'relative',
-    overflow: 'visible',
-  },
-  rideCardActive: { 
-    backgroundColor: '#E5A93B',
-  },
-  rideCardInactive: {
-    backgroundColor: '#1E1E1E',
-  },
-  carImage: {
-    position: 'absolute',
-    top: -45,
-    left: '50%',
-    marginLeft: -65,
-    width: 130,
-    height: 140,
-    resizeMode: 'contain',
-  },
-  cardInfo: {
-    marginTop: 'auto',
-  },
-  rideName: { 
-    color: '#FFF', 
-    fontSize: 16, 
-    fontWeight: '700', 
-    marginBottom: 4 
-  },
-  ridePrice: { 
-    fontSize: 13, 
-    fontWeight: '600'
-  },
-  ridePriceActive: {
-    color: '#3E2723',
-  },
-  ridePriceInactive: {
-    color: '#8E8E93',
-  },
-  actionButton: { 
-    backgroundColor: '#000000', 
-    paddingVertical: 24, 
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderTopWidth: 1,
-    borderColor: '#181818',
-  },
-  actionText: { 
-    color: '#E5A93B', 
-    fontWeight: '800', 
-    fontSize: 17,
-    letterSpacing: 2,
   },
   sosButton: { 
     position: 'absolute', 
-    top: 50, 
+    bottom: 80, 
     right: 20, 
-    width: 44, 
-    height: 44, 
-    borderRadius: 22, 
+    width: 60, 
+    height: 60, 
+    borderRadius: 30, 
     backgroundColor: '#FF3B30', 
     justifyContent: 'center', 
     alignItems: 'center', 
-    zIndex: 10,
+    zIndex: 999,
+    elevation: 10,
   },
-  sosText: { 
-    color: '#FFF', 
-    fontSize: 12, 
-    fontWeight: '800' 
-  }
+  sosText: { color: '#FFF', fontSize: 16, fontWeight: '800' },
+  bottomContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 20,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+  },
+  startRideBtn: {
+    backgroundColor: '#D32F2F',
+    paddingVertical: 18,
+    paddingHorizontal: 40,
+    borderRadius: 30,
+    width: '100%',
+    alignItems: 'center',
+    elevation: 5,
+  },
+  startRideText: { color: '#FFF', fontWeight: 'bold', fontSize: 16 },
+  menuButton: {
+    position: 'absolute',
+    top: 60,
+    left: 20,
+    width: 50,
+    height: 50,
+    backgroundColor: '#FFF',
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 5,
+    zIndex: 100,
+  },
+  menuIcon: { fontSize: 24, color: '#D32F2F' },
 });

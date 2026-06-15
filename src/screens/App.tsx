@@ -1,8 +1,8 @@
 import 'react-native-gesture-handler';
 import React, { useEffect } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { getFirebaseApp, db } from './src/services/firebaseConfig';
-import AppNavigator from './src/navigation/AppNavigator';
+import { getFirebaseApp, db } from '../services/firebaseConfig';
+import AppNavigator from '../navigation/AppNavigator';
 
 export default function App() {
   useEffect(() => {
@@ -13,8 +13,8 @@ export default function App() {
     // Test connexion Firestore
    const testFirestore = async () => {
   try {
-    const { doc, getDoc } = await import('@react-native-firebase/firestore');
-    await getDoc(doc(db, '_test_', 'ping'));
+    const firestore = (await import('@react-native-firebase/firestore')).default;
+    await firestore().collection('_test_').doc('ping').get();
     console.log('✅ Firestore connecté');
   } catch (error) {
     console.error('❌ Firestore erreur:', error);

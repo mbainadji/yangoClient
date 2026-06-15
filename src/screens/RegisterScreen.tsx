@@ -12,37 +12,44 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import auth from '@react-native-firebase/auth';
 
-export default function LoginScreen() {
+export default function RegisterScreen() {
   const navigation = useNavigation<any>();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleLogin = async () => {
-    if (!email || !password) {
+  const handleRegister = async () => {
+    if (!email || !password || !confirmPassword) {
       Alert.alert('Erreur', 'Veuillez remplir tous les champs');
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert('Erreur', 'Les mots de passe ne correspondent pas');
+      return;
+    }
+    if (password.length < 6) {
+      Alert.alert('Erreur', 'Le mot de passe doit contenir au moins 6 caractères');
       return;
     }
 
     setLoading(true);
     try {
-      await auth().signInWithEmailAndPassword(email.trim(), password);
+      await auth().createUserWithEmailAndPassword(email.trim(), password);
       navigation.replace('MainApp');
     } catch (error: any) {
-      console.error('❌ Erreur de connexion:', error);
+      console.error('❌ Erreur d\'inscription:', error);
       let message = 'Une erreur est survenue. Réessayez.';
-      if (error.code === 'auth/invalid-email') {
+      if (error.code === 'auth/email-already-in-use') {
+        message = 'Cet email est déjà utilisé.';
+      } else if (error.code === 'auth/invalid-email') {
         message = 'Adresse email invalide.';
-      } else if (
-        error.code === 'auth/user-not-found' ||
-        error.code === 'auth/wrong-password' ||
-        error.code === 'auth/invalid-credential'
-      ) {
-        message = 'Email ou mot de passe incorrect.';
+      } else if (error.code === 'auth/weak-password') {
+        message = 'Mot de passe trop faible.';
       } else if (error.code === 'auth/network-request-failed') {
         message = 'Vérifiez votre connexion internet.';
       }
-      Alert.alert('Connexion échouée', message);
+      Alert.alert('Inscription échouée', message);
     } finally {
       setLoading(false);
     }
@@ -53,7 +60,7 @@ export default function LoginScreen() {
       style={styles.container}
     >
       <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-        <Text style={styles.backIconWhite}>←</Text>
+        <Text style={styles.backIcon}>←</Text>
       </TouchableOpacity>
 
       <View style={styles.logoContainer}>
@@ -84,24 +91,38 @@ export default function LoginScreen() {
           onChangeText={setPassword}
         />
 
+        <Text style={styles.label}>Confirmer le mot de passe</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="••••••••"
+          placeholderTextColor="#888"
+          secureTextEntry
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+        />
+
         <TouchableOpacity
           style={styles.button}
-          onPress={handleLogin}
+          onPress={handleRegister}
           disabled={loading}
         >
           {loading ? (
-            <ActivityIndicator color="#FFF" />
+            <ActivityIndicator color="#000" />
           ) : (
-            <Text style={styles.buttonText}>Se connecter</Text>
+            <Text style={styles.buttonText}>S'inscrire</Text>
           )}
         </TouchableOpacity>
-        <TouchableOpacity style={styles.linkContainer} onPress={() => navigation.navigate('Register')}>
-          <Text style={styles.linkText}>Pas de compte ? <Text style={styles.linkBold}>S'inscrire</Text></Text>
+
+        <TouchableOpacity
+          style={styles.linkContainer}
+          onPress={() => navigation.navigate('Login')}
+        >
+          <Text style={styles.linkText}>
+            Déjà un compte ? <Text style={styles.linkBold}>Se connecter</Text>
+          </Text>
         </TouchableOpacity>
-        
       </View>
     </KeyboardAvoidingView>
-    
   );
 }
 
@@ -113,7 +134,7 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   backBtn: { position: 'absolute', top: 50, left: 24, zIndex: 10 },
-  backIconWhite: { fontSize: 30, color: '#FFF', fontWeight: 'bold' },
+  backIcon: { fontSize: 30, color: '#FFF', fontWeight: 'bold' },
   logoContainer: {
     alignItems: 'center',
     marginBottom: 40,

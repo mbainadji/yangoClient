@@ -1,7 +1,7 @@
-import { PermissionsAndroid } from 'react-native';
-import Geolocation from 'react-native-geolocation-service';
+import { PermissionsAndroid, Platform } from 'react-native';
 
 export const requestLocationPermission = async () => {
+  if (Platform.OS !== 'android') return true;
   try {
     const granted = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
@@ -14,7 +14,7 @@ export const requestLocationPermission = async () => {
 };
 
 export const getCurrentPosition = (callback: (coords: any) => void) => {
-  Geolocation.getCurrentPosition(
+  navigator.geolocation.getCurrentPosition(
     (position) => {
       callback(position.coords);
     },
