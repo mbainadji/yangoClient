@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { 
   View, 
   Text, 
@@ -16,6 +16,7 @@ import {
 import { WebView } from 'react-native-webview';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import firestore from '@react-native-firebase/firestore';
+import auth from '@react-native-firebase/auth';
 import Geolocation from 'react-native-geolocation-service';
 
 const DEFAULT_VEHICLES = [
@@ -49,6 +50,48 @@ export default function ClientHomeScreen() {
   const [vehicles, setVehicles] = useState(DEFAULT_VEHICLES);
   const [selectedVehicle, setSelectedVehicle] = useState(DEFAULT_VEHICLES[0]);
   const [syncing, setSyncing] = useState(false);
+  const [activeBooking, setActiveBooking] = useState<any>(null);
+  const [activeSos, setActiveSos] = useState<any>(null);
+
+  // Écouter les réservations actives de l'utilisateur
+  useEffect(() => {
+    const user = auth().currentUser;
+    if (!user) return;
+
+    const unsubscribe = firestore()
+      .collection('bookings')
+      .where('userId', '==', user.uid)
+      .where('status', 'in', ['searching', 'accepted', 'arrived'])
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .onSnapshot(snapshot => {
+        if (snapshot && !snapshot.empty) {
+          setActiveBooking({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+        } else {
+          setActiveBooking(null);
+        }
+      }, err => console.log("Erreur Firestore Listener:", err));
+
+    const unsubscribeSos = firestore()
+      .collection('sos_alerts')
+      .where('userId', '==', user.uid)
+      .where('status', '==', 'urgent')
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .onSnapshot(snapshot => {
+        if (snapshot && !snapshot.empty) {
+          setActiveSos({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() });
+        } else {
+          setActiveSos(null);
+        }
+      }, err => console.log("Erreur Firestore SOS Listener:", err));
+
+    return () => {
+      unsubscribe();
+      unsubscribeSos();
+    };
+  }, []);
+
   const [watchId, setWatchId] = useState<number | null>(null);
 
   // Gestion de la géolocalisation réelle
@@ -108,6 +151,26 @@ export default function ClientHomeScreen() {
     loadRideOptions();
   }, []);
 
+  const cancelRide = async () => {
+    if (!activeBooking) return;
+    try {
+      await firestore().collection('bookings').doc(activeBooking.id).update({ status: 'cancelled' });
+      Alert.alert("Annulée", "Votre course a été annulée.");
+    } catch (e) {
+      Alert.alert("Erreur", "Impossible d'annuler la course.");
+    }
+  };
+
+  const cancelSos = async () => {
+    if (!activeSos) return;
+    try {
+      await firestore().collection('sos_alerts').doc(activeSos.id).update({ status: 'resolved' });
+      Alert.alert("Terminé", "L'alerte SOS a été marquée comme résolue.");
+    } catch (e) {
+      Alert.alert("Erreur", "Impossible d'annuler l'alerte.");
+    }
+  };
+
   const handleRideNow = async () => {
     navigation.navigate('ConfirmRide', { 
       vehicle: selectedVehicle,
@@ -147,7 +210,7 @@ export default function ClientHomeScreen() {
   };
 
   // Generate HTML for Leaflet Free Map (using CartoDB basemap tiles, 100% free and API-key-less)
-  const getMapHtml = () => {
+  const mapHtml = useMemo(() => {
     const startCoords = [userLocation.lat, userLocation.lng];
     const carSvg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 60" width="30" height="60">
@@ -267,7 +330,7 @@ export default function ClientHomeScreen() {
       </body>
       </html>
     `;
-  };
+  }, [userLocation, destCoords]);
 
   return (
     <View style={styles.container}>
@@ -275,7 +338,7 @@ export default function ClientHomeScreen() {
 
       <WebView
         style={styles.map}
-        source={{ html: getMapHtml() }}
+        source={{ html: mapHtml }}
       />
 
       <TouchableOpacity 
@@ -292,12 +355,48 @@ export default function ClientHomeScreen() {
 
       {/* Bouton Commencer la course */}
       <View style={styles.bottomContainer}>
-        <TouchableOpacity 
-          style={styles.startRideBtn} 
-          onPress={() => navigation.navigate('Booking')}
-        >
-          <Text style={styles.startRideText}>COMMENCER LA COURSE</Text>
-        </TouchableOpacity>
+        {activeSos ? (
+          <View style={[styles.activeRideCard, { borderColor: '#D32F2F', borderWidth: 2 }]}>
+            <View style={styles.statusRow}>
+              <ActivityIndicator size="small" color="#D32F2F" />
+              <Text style={styles.statusText}>URGENCE EN COURS</Text>
+            </View>
+            <Text style={styles.rideInfo}>Vers : {activeSos.hospital?.split(',')[0]}</Text>
+            <TouchableOpacity style={[styles.cancelButton, {backgroundColor: '#D32F2F'}]} onPress={cancelSos}>
+              <Text style={[styles.cancelButtonText, {color: '#FFF'}]}>ANNULER L'URGENCE</Text>
+            </TouchableOpacity>
+          </View>
+        ) : activeBooking ? (
+          <View style={styles.activeRideCard}>
+            <View style={styles.statusRow}>
+              <ActivityIndicator size="small" color="#D32F2F" />
+              <Text style={styles.statusText}>
+                {activeBooking.status === 'searching' ? 'Recherche de chauffeur...' : 
+                 activeBooking.status === 'accepted' ? 'Chauffeur en route' : 'Chauffeur arrivé'}
+              </Text>
+            </View>
+            
+            <Text style={styles.rideInfo} numberOfLines={1}>📍 {activeBooking.destination}</Text>
+            
+            {activeBooking.status !== 'searching' && (
+              <View style={styles.driverInfoBox}>
+                <Text style={styles.driverName}>{activeBooking.driverName || 'Chauffeur Yango'}</Text>
+                <Text style={styles.vehicleDetails}>{activeBooking.vehiclePlate || 'Toyota Corolla • Rouge'}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity style={[styles.cancelButton, {marginTop: 10}]} onPress={cancelRide}>
+              <Text style={styles.cancelButtonText}>ANNULER LA COURSE</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity 
+            style={styles.startRideBtn} 
+            onPress={() => navigation.navigate('Booking')}
+          >
+            <Text style={styles.startRideText}>COMMENCER LA COURSE</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -356,4 +455,13 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   menuIcon: { fontSize: 24, color: '#D32F2F' },
+  activeRideCard: { backgroundColor: '#FFF', width: '100%', padding: 20, borderRadius: 20, elevation: 10 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  statusText: { marginLeft: 10, fontWeight: 'bold', color: '#D32F2F' },
+  rideInfo: { fontSize: 14, color: '#666', marginBottom: 15 },
+  cancelButton: { backgroundColor: '#F0F0F0', padding: 12, borderRadius: 10, alignItems: 'center' },
+  cancelButtonText: { color: '#333', fontWeight: 'bold', fontSize: 12 },
+  driverInfoBox: { padding: 10, backgroundColor: '#F9F9F9', borderRadius: 10, marginBottom: 5 },
+  driverName: { fontWeight: 'bold', color: '#000' },
+  vehicleDetails: { fontSize: 12, color: '#666' },
 });

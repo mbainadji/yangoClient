@@ -13,6 +13,8 @@ import BookingScreen from '../screens/BookingScreen';
 import SosScreen from '../screens/SosScreen';
 import HistoryScreen from '../screens/HistoryScreen';
 import ProfileScreen from '../screens/ProfileScreen';
+import ConfirmRideScreen from '../screens/ConfirmRideScreen';
+import DestinationSearchScreen from '../screens/DestinationSearchScreen';
 
 const Stack = createStackNavigator();
 const Drawer = createDrawerNavigator();
@@ -26,6 +28,8 @@ function HomeStack() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="ClientHome" component={ClientHomeScreen} />
       <Stack.Screen name="Booking" component={BookingScreen} />
+      <Stack.Screen name="ConfirmRide" component={ConfirmRideScreen} />
+      <Stack.Screen name="DestinationSearch" component={DestinationSearchScreen} />
     </Stack.Navigator>
   );
 }

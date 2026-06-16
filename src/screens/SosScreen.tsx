@@ -1,11 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, 
-  Linking, SafeAreaView, Alert, PermissionsAndroid, Platform, FlatList, ActivityIndicator
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, TextInput,
+  Linking, SafeAreaView, Alert, PermissionsAndroid, Platform, FlatList, ActivityIndicator, Keyboard
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { launchCamera } from 'react-native-image-picker';
 import Geolocation from 'react-native-geolocation-service';
+import firestore from '@react-native-firebase/firestore';
+import auth from '@react-native-firebase/auth';
+import Video from 'react-native-video';
+import { calculateDistance } from '../utils/geo';
 
 const URGENCES = [
   { id: '1', nom: "Crise cardiaque", etapes: ["Allonger la victime au calme", "Appeler le 119", "Desserrer les vêtements"] },
@@ -22,6 +26,11 @@ export default function SosScreen() {
   const [hospitals, setHospitals] = useState<any[]>([]);
   const [loadingHospitals, setLoadingHospitals] = useState(false);
   const [showHospitals, setShowHospitals] = useState(false);
+  const [capturedMedia, setCapturedMedia] = useState<{uri: string, type: 'photo' | 'video'} | null>(null);
+  const [hospitalSearch, setHospitalSearch] = useState('');
+  const [hospitalSuggestions, setHospitalSuggestions] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchTimeout = useRef<any>(null);
 
   // Récupérer la position au chargement
   useEffect(() => {
@@ -38,10 +47,35 @@ export default function SosScreen() {
     getLocation();
   }, []);
 
+  // Recherche manuelle d'hôpitaux
+  const searchHospitalManual = async (text: string) => {
+    setHospitalSearch(text);
+    if (text.length < 2) {
+      setHospitalSuggestions([]);
+      return;
+    }
+
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    searchTimeout.current = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&limit=5&countrycodes=cm&lat=${userLocation?.lat}&lon=${userLocation?.lng}`;
+        const response = await fetch(url, { headers: { 'User-Agent': 'YangoSosApp' } });
+        const data = await response.json();
+        setHospitalSuggestions(data);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 600);
+  };
+
   // Chercher les hôpitaux proches via OpenStreetMap
   const fetchNearbyHospitals = async () => {
     if (!userLocation) return;
     setLoadingHospitals(true);
+    setShowHospitals(true); // Afficher la section dès le début pour voir le chargement
     try {
       // Recherche "hospital" autour de la position actuelle au Cameroun
       const url = `https://nominatim.openstreetmap.org/search?q=hospital&format=json&limit=5&countrycodes=cm&lat=${userLocation.lat}&lon=${userLocation.lng}`;
@@ -59,7 +93,6 @@ export default function SosScreen() {
       });
       
       setHospitals(enriched.sort((a: any, b: any) => a.distance - b.distance));
-      setShowHospitals(true);
     } catch (error) {
       Alert.alert("Erreur", "Impossible de charger les hôpitaux environnants.");
     } finally {
@@ -67,27 +100,32 @@ export default function SosScreen() {
     }
   };
 
-  // Fonction Haversine pour la distance
-  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return Number((R * c).toFixed(1));
-  };
-
-  const handleHospitalSelect = (hospital: any) => {
+  const handleHospitalSelect = async (hospital: any) => {
     Alert.alert(
       "Confirmer l'évacuation",
       `Voulez-vous commander une ambulance vers ${hospital.display_name.split(',')[0]} ?\n\nDistance: ${hospital.distance} km\nPrix Estimé: ${hospital.price} FCFA`,
       [
         { text: "Annuler", style: "cancel" },
-        { text: "COMMANDER", onPress: () => {
+        { text: "COMMANDER", onPress: async () => {
+          setLoadingHospitals(true);
+          const user = auth().currentUser;
+          try {
+            // Sauvegarde de l'alerte SOS avec le chemin local du média
+            await firestore().collection('sos_alerts').add({
+              userId: user?.uid,
+              userEmail: user?.email,
+              location: userLocation,
+              hospital: hospital.display_name,
+              mediaUrl: capturedMedia?.uri || null, // On stocke l'URI locale au lieu de l'URL web
+              mediaType: capturedMedia?.type || null,
+              status: 'urgent',
+              createdAt: firestore.FieldValue.serverTimestamp()
+            });
+          } catch (e) { console.error("Erreur Firestore SOS:", e); }
+          
+          setLoadingHospitals(false);
           Alert.alert("Urgence lancée", "Une ambulance prioritaire est en route.");
-          navigation.navigate('ClientHome');
+          navigation.navigate('Home', { screen: 'ClientHome' });
         }}
       ]
     );
@@ -101,6 +139,11 @@ export default function SosScreen() {
       permissions.push(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
     }
 
+    // Sur Android < 10, saveToPhotos nécessite WRITE_EXTERNAL_STORAGE
+    if (Platform.Version < 29) {
+      permissions.push(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
+    }
+
     const results = await PermissionsAndroid.requestMultiple(permissions);
     
     const cameraGranted = results[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED;
@@ -110,21 +153,29 @@ export default function SosScreen() {
   };
 
   const handleMedia = async (type: 'photo' | 'video') => {
+    if (!userLocation) {
+      Alert.alert("Localisation requise", "Veuillez patienter pendant que nous récupérons votre position GPS.");
+      return;
+    }
+
     const hasPermission = await requestPermissions(type);
     if (!hasPermission) {
-      Alert.alert("Permission refusée", "L'accès à la caméra (et au micro pour la vidéo) est nécessaire.");
+      Alert.alert("Permission refusée", "L'accès à la caméra et au stockage est nécessaire pour cette fonction.");
       return;
     }
 
     launchCamera({ 
       mediaType: type, 
       videoQuality: 'medium', 
-      saveToPhotos: true 
+      saveToPhotos: false // Changé à false pour plus de rapidité et moins de problèmes de droits
     }, (response) => {
       if (response.didCancel) return;
-      if (response.errorCode) Alert.alert("Erreur", response.errorMessage);
+      if (response.errorCode) Alert.alert("Erreur", response.errorMessage || "Erreur caméra");
       else {
-        Alert.alert("Média capturé", "Preuve enregistrée. Recherche des hôpitaux les plus proches...");
+        const uri = response.assets?.[0]?.uri;
+        if (uri) setCapturedMedia({ uri, type });
+
+        Alert.alert("Média capturé", "Preuve enregistrée. Choisissez l'hôpital de destination ci-dessous.");
         fetchNearbyHospitals();
       }
     });
@@ -138,6 +189,60 @@ export default function SosScreen() {
         </TouchableOpacity>
         <Text style={styles.title}>CENTRE DE SECOURS COMPLET</Text>
       </View>
+
+      {capturedMedia && (
+        <View style={styles.mediaPreviewContainer}>
+          <Text style={styles.previewTitle}>Urgence capturée :</Text>
+          {capturedMedia.type === 'photo' ? (
+            <Image source={{ uri: capturedMedia.uri }} style={styles.previewMedia} />
+          ) : (
+            <Video 
+              source={{ uri: capturedMedia.uri }} 
+              style={styles.previewMedia}
+              controls={true}
+              resizeMode="cover"
+              paused={true}
+              // Empêche le crash si le fichier est corrompu
+              onError={(e) => console.log("Erreur vidéo:", e)}
+            />
+          )}
+          
+          <View style={styles.searchContainer}>
+            <Text style={styles.label}>HÔPITAL DE DESTINATION</Text>
+            <View>
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Rechercher un hôpital spécifique..."
+                placeholderTextColor="#999"
+                value={hospitalSearch}
+                onChangeText={searchHospitalManual}
+              />
+              {isSearching && <ActivityIndicator size="small" color="#D32F2F" style={styles.searchLoader} />}
+            </View>
+            
+            {hospitalSuggestions.length > 0 && (
+              <View style={styles.suggestionsBox}>
+                {hospitalSuggestions.map((item) => (
+                  <TouchableOpacity 
+                    key={item.place_id} 
+                    style={styles.suggestionItem}
+                    onPress={() => {
+                      if (userLocation) {
+                        const dist = calculateDistance(userLocation.lat, userLocation.lng, parseFloat(item.lat), parseFloat(item.lon));
+                        handleHospitalSelect({...item, distance: dist, price: Math.ceil(dist) * 250});
+                      }
+                      setHospitalSuggestions([]);
+                      Keyboard.dismiss();
+                    }}
+                  >
+                    <Text style={styles.suggestionText} numberOfLines={1}>{item.display_name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        </View>
+      )}
 
       <ScrollView style={styles.content}>
         <Text style={styles.sectionTitle}>PROTOCOLES DE SECOURS</Text>
@@ -218,6 +323,21 @@ const styles = StyleSheet.create({
   emergencyRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
   callBtn: { padding: 15, borderRadius: 10, width: '31%', alignItems: 'center' },
   btnText: { color: '#FFF', fontWeight: 'bold' },
+  mediaPreviewContainer: { padding: 15, backgroundColor: '#F9F9F9', borderBottomWidth: 2, borderBottomColor: '#D32F2F' },
+  previewTitle: { fontWeight: 'bold', marginBottom: 10, color: '#D32F2F', fontSize: 14 },
+  previewMedia: { width: '100%', height: 180, borderRadius: 12, backgroundColor: '#000' },
+  videoPlaceholder: { justifyContent: 'center', alignItems: 'center', borderStyle: 'dashed', borderWidth: 1, borderColor: '#D32F2F' },
+  searchContainer: { marginTop: 15, position: 'relative' },
+  label: { fontSize: 11, fontWeight: 'bold', color: '#D32F2F', marginBottom: 5 },
+  searchInput: { backgroundColor: '#FFF', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#DDD', color: '#000' },
+  searchLoader: { position: 'absolute', right: 10, top: 12 },
+  suggestionsBox: { 
+    backgroundColor: '#FFF', borderRadius: 8, marginTop: 5, 
+    elevation: 5, borderOuterWidth: 1, borderColor: '#EEE',
+    position: 'absolute', top: 65, left: 0, right: 0, zIndex: 100
+  },
+  suggestionItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#EEE' },
+  suggestionText: { fontSize: 13, color: '#333' },
   backBtn: { padding: 20, alignItems: 'center', backgroundColor: '#000' },
   backText: { color: '#FFF', fontWeight: 'bold' }
 });

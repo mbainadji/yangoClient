@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, Alert, FlatList, Keyboard } from 'react-native';
 import { WebView } from 'react-native-webview';
 import Geolocation from 'react-native-geolocation-service';
 import firestore from '@react-native-firebase/firestore';
 import auth from '@react-native-firebase/auth';
 import { useNavigation } from '@react-navigation/native';
+import { calculateDistance as getGeoDistance } from '../utils/geo';
 
 export default function BookingScreen() {
   const navigation = useNavigation<any>();
@@ -80,23 +81,13 @@ export default function BookingScreen() {
     setDest({ lat: parseFloat(item.lat), lng: parseFloat(item.lon) });
   };
 
-  // Calcul de distance (Haversine simplifiée)
-  const calculateDistance = () => {
-    const R = 6371;
-    const dLat = (dest.lat - origin.lat) * Math.PI / 180;
-    const dLon = (dest.lng - origin.lng) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(origin.lat * Math.PI / 180) * Math.cos(dest.lat * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    const d = R * c;
-    setDistance(Number(d.toFixed(2)));
-    setPrice(Math.ceil(d) * 250);
-  };
-
-  // Recalculer la distance quand les coordonnées de destination changent
+  // Recalculer la distance et le prix uniquement quand c'est nécessaire
   useEffect(() => { 
-    if (isDestinationSelected) calculateDistance(); 
+    if (isDestinationSelected) {
+      const d = getGeoDistance(origin.lat, origin.lng, dest.lat, dest.lng);
+      setDistance(d);
+      setPrice(Math.ceil(d) * 250);
+    }
   }, [dest, origin, isDestinationSelected]);
 
   // Fonction pour recentrer la carte avec une transition fluide
@@ -111,20 +102,13 @@ export default function BookingScreen() {
 
   const handleBooking = async () => {
     if (!isDestinationSelected) return Alert.alert("Erreur", "Veuillez sélectionner une destination dans la liste");
-    const user = auth().currentUser;
     
-    setLoading(true);
-    try {
-      await firestore().collection('bookings').add({
-        userId: user?.uid,
-        userEmail: user?.email,
-        origin, destination: destinationName, distance, price,
-        status: 'searching', createdAt: firestore.FieldValue.serverTimestamp()
-      });
-      Alert.alert("Succès", "Recherche d'un chauffeur...");
-      navigation.navigate('ClientHome');
-    } catch (e) { Alert.alert("Erreur", "Echec connexion"); }
-    finally { setLoading(false); }
+    navigation.navigate('ConfirmRide', {
+      vehicle: { name: 'Yango Custom', estimate: price },
+      destination: destinationName,
+      origin: 'Ma position actuelle',
+      originCoords: origin,
+    });
   };
 
   const carSvg = `
@@ -143,7 +127,7 @@ export default function BookingScreen() {
     </svg>
   `.trim();
 
-  const mapHtml = `
+  const mapHtml = useMemo(() => `
     <!DOCTYPE html><html><head>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -193,7 +177,7 @@ export default function BookingScreen() {
         setTimeout(animateTrip, 500);
       ` : ''}
     </script></body></html>
-  `;
+  `, [origin, dest, isDestinationSelected]);
 
   return (
     <View style={styles.container}>
