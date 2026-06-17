@@ -21,6 +21,10 @@ export default function BookingScreen() {
   const [loading, setLoading] = useState(false);
   const [carPosition, setCarPosition] = useState<any>(null);
   const searchTimeout = useRef<any>(null);
+  // OPTIMISATION : référence pour pouvoir nettoyer l'intervalle d'animation
+  // de la voiture et éviter l'accumulation de setInterval en cas de changement
+  // rapide de destination (fuite mémoire + ralentissement progressif de l'app).
+  const carAnimationRef = useRef<any>(null);
 
   useEffect(() => {
     Geolocation.getCurrentPosition(
@@ -30,8 +34,21 @@ export default function BookingScreen() {
     );
   }, []);
 
-  // Recherche d'adresses via Nominatim (OpenStreetMap) - conservé tel quel
-  const searchPlaces = async (text: string) => {
+  // Nettoyage de l'intervalle d'animation au démontage du composant
+  useEffect(() => {
+    return () => {
+      if (carAnimationRef.current) {
+        clearInterval(carAnimationRef.current);
+        carAnimationRef.current = null;
+      }
+      if (searchTimeout.current) {
+        clearTimeout(searchTimeout.current);
+      }
+    };
+  }, []);
+
+  // Recherche d'adresses via Nominatim (OpenStreetMap)
+  const searchPlaces = (text: string) => {
     setDestinationName(text);
     setIsDestinationSelected(false);
     if (text.length < 1) {
@@ -45,7 +62,8 @@ export default function BookingScreen() {
       setIsSearching(true);
       try {
         const viewboxBias = `&viewbox=${origin.lng-1},${origin.lat+1},${origin.lng+1},${origin.lat-1}&bounded=0`;
-        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=15&countrycodes=cm&accept-language=fr${viewboxBias}`;
+        // limit réduit de 15 à 8 : moins de résultats à parser/render = plus rapide
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(text)}&format=json&addressdetails=1&limit=8&countrycodes=cm&accept-language=fr${viewboxBias}`;
         const response = await fetch(url, {
           headers: { 'User-Agent': 'YangoClientApp' }
         });
@@ -56,7 +74,7 @@ export default function BookingScreen() {
       } finally {
         setIsSearching(false);
       }
-    }, 500);
+    }, 600); // debounce augmenté à 600ms pour réduire les appels réseau pendant la frappe
   };
 
   const selectSuggestion = (item: any) => {
@@ -74,7 +92,6 @@ export default function BookingScreen() {
       setPrice(Math.ceil(d) * 250);
       setCarPosition({ latitude: origin.lat, longitude: origin.lng });
 
-      // Ajuster la vue de la carte pour montrer les deux points
       mapRef.current?.fitToCoordinates(
         [
           { latitude: origin.lat, longitude: origin.lng },
@@ -83,21 +100,27 @@ export default function BookingScreen() {
         { edgePadding: { top: 100, right: 50, bottom: 250, left: 50 }, animated: true }
       );
 
-      // Animer la voiture le long du trajet
       animateCar();
     }
   }, [dest, origin, isDestinationSelected]);
 
   const animateCar = () => {
+    // Nettoie toute animation précédente encore active avant d'en démarrer une nouvelle
+    if (carAnimationRef.current) {
+      clearInterval(carAnimationRef.current);
+      carAnimationRef.current = null;
+    }
+
     const duration = 5000;
     const steps = 60;
     let step = 0;
-    const interval = setInterval(() => {
+    carAnimationRef.current = setInterval(() => {
       step++;
       const progress = step / steps;
       if (progress >= 1) {
         setCarPosition({ latitude: dest.lat, longitude: dest.lng });
-        clearInterval(interval);
+        clearInterval(carAnimationRef.current);
+        carAnimationRef.current = null;
         return;
       }
       const lat = origin.lat + (dest.lat - origin.lat) * progress;

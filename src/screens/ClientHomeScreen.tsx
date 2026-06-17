@@ -25,13 +25,6 @@ const DEFAULT_VEHICLES = [
   { id: '3', name: 'Yango XL', subtitle: 'Grand volume', estimate: 4500, color: '#1E1E1E' }
 ];
 
-const ROUTE_COORDS = [
-  { latitude: 3.848, longitude: 11.502 },
-  { latitude: 3.851, longitude: 11.508 },
-  { latitude: 3.853, longitude: 11.512 },
-  { latitude: 3.857, longitude: 11.520 }
-];
-
 const NEARBY_CARS = [
   { id: 'c1', latitude: 3.8495, longitude: 11.505, heading: -45 },
   { id: 'c2', latitude: 3.852, longitude: 11.509, heading: 60 },
@@ -92,10 +85,29 @@ export default function ClientHomeScreen() {
     };
   }, []);
 
-  const [watchId, setWatchId] = useState<number | null>(null);
-
-  // Gestion de la géolocalisation réelle
+  // Gestion de la géolocalisation réelle (une seule fois au montage)
   useEffect(() => {
+    let isMounted = true;
+
+    const getRealLocation = () => {
+      try {
+        Geolocation.getCurrentPosition(
+          (position) => {
+            if (!isMounted) return;
+            const { latitude, longitude } = position.coords;
+            setUserLocation({ lat: latitude, lng: longitude });
+            setUserAddress('Position actuelle détectée');
+          },
+          (error) => {
+            console.log("Info GPS:", error.message);
+          },
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 10000 }
+        );
+      } catch (e) {
+        console.warn("Geolocation service non disponible");
+      }
+    };
+
     const requestLocationPermission = async () => {
       if (Platform.OS === 'android') {
         const granted = await PermissionsAndroid.request(
@@ -109,33 +121,18 @@ export default function ClientHomeScreen() {
       }
     };
 
-    const getRealLocation = () => {
-      try {
-        Geolocation.getCurrentPosition(
-          (position) => {
-            const { latitude, longitude } = position.coords;
-            setUserLocation({ lat: latitude, lng: longitude });
-            setUserAddress('Position actuelle détectée');
-          },
-          (error) => {
-            console.log("Info GPS:", error.message);
-            // On ne bloque pas l'app si le GPS échoue, on reste sur les coordonnées par défaut
-          },
-          { enableHighAccuracy: false, timeout: 20000, maximumAge: 10000 }
-        );
-      } catch (e) {
-        console.warn("Geolocation service non disponible");
-      }
-    };
-
     requestLocationPermission();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
     const loadRideOptions = async () => {
       setSyncing(true);
       try {
-        const snapshot = await firestore().collection('rideOptions').orderBy('order').get();
+        const snapshot = await firestore().collection('rideOptions').orderBy('order').limit(10).get();
         if (!snapshot.empty) {
           const loaded = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() as any }));
           setVehicles(loaded);
@@ -209,7 +206,9 @@ export default function ClientHomeScreen() {
     return `Est. ${str}`;
   };
 
-  // Generate HTML for Leaflet Free Map (using CartoDB basemap tiles, 100% free and API-key-less)
+  // OPTIMISATION : "userLocation" retiré des dépendances.
+  // La WebView/Leaflet est lourde (HTML + tiles + scripts) ; la reconstruire
+  // à chaque update GPS causait la lenteur perçue sur cet écran.
   const mapHtml = useMemo(() => {
     const startCoords = [userLocation.lat, userLocation.lng];
     const carSvg = `
@@ -295,7 +294,6 @@ export default function ClientHomeScreen() {
           
           map.fitBounds(polyline.getBounds(), { padding: [40, 40] });
 
-          // Start Point Marker
           const startIcon = L.divIcon({
             className: 'start-marker-icon',
             html: '<div class="start-marker"><div class="start-marker-inner"></div></div>',
@@ -304,7 +302,6 @@ export default function ClientHomeScreen() {
           });
           L.marker(start, { icon: startIcon }).addTo(map);
 
-          // Destination Point Marker
           const destIcon = L.divIcon({
             className: 'dest-marker-icon',
             html: '<div class="dest-marker"><div class="dest-marker-inner"></div></div>',
@@ -313,7 +310,6 @@ export default function ClientHomeScreen() {
           });
           L.marker(dest, { icon: destIcon }).addTo(map);
 
-          // Nearby Car Markers
           const cars = ${JSON.stringify(NEARBY_CARS)};
           const carIconUrl = "data:image/svg+xml;utf8," + encodeURIComponent(\`${carSvg.trim()}\`);
           
@@ -330,7 +326,7 @@ export default function ClientHomeScreen() {
       </body>
       </html>
     `;
-  }, [userLocation, destCoords]);
+  }, [destCoords]);
 
   return (
     <View style={styles.container}>
@@ -348,12 +344,10 @@ export default function ClientHomeScreen() {
         <Text style={styles.menuIcon}>☰</Text>
       </TouchableOpacity>
 
-      {/* SOS Button fixe */}
       <TouchableOpacity style={styles.sosButton} onPress={() => navigation.navigate('Sos')}>
         <Text style={styles.sosText}>SOS</Text>
       </TouchableOpacity>
 
-      {/* Bouton Commencer la course */}
       <View style={styles.bottomContainer}>
         {activeSos ? (
           <View style={[styles.activeRideCard, { borderColor: '#D32F2F', borderWidth: 2 }]}>
